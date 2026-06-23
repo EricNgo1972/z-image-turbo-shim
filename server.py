@@ -22,17 +22,41 @@ MODEL_ID = os.getenv("MODEL_ID", "Tongyi-MAI/Z-Image-Turbo")
 MODEL_NAME = os.getenv("MODEL_NAME", "z-image-turbo")
 API_KEY = os.getenv("API_KEY")  # if set, require "Authorization: Bearer <API_KEY>"
 PUBLIC_BASE = os.getenv("PUBLIC_BASE", "http://localhost:8000")  # for response_format=url
-DTYPE = os.getenv("DTYPE", "bfloat16")  # "bfloat16" | "float16"
-CPU_OFFLOAD = os.getenv("CPU_OFFLOAD", "1") == "1"  # keep VRAM low (~10GB cards)
+DTYPE = os.getenv("DTYPE", "bfloat16")  # compute dtype: "bfloat16" | "float16"
+# "none" | "fp8". fp8 = torchao float8 weight-only quant (~6GB, fully on-GPU on 10GB cards).
+QUANTIZATION = os.getenv("QUANTIZATION", "none").lower()
+CPU_OFFLOAD = os.getenv("CPU_OFFLOAD", "1") == "1"  # keep VRAM low (ignored when fp8)
 IMG_DIR = os.getenv("IMG_DIR", "images")
 IMG_TTL_SECONDS = int(os.getenv("IMG_TTL_SECONDS", "3600"))  # url-mode cleanup age
 
 os.makedirs(IMG_DIR, exist_ok=True)
 
+
+def _quantize_fp8(pipeline):
+    """Apply torchao float8 weight-only quantization to the heavy submodels.
+
+    Loads in `DTYPE`, quantizes weights to float8 in place (~halves VRAM vs bf16),
+    so the 6B transformer + text encoder fit fully on a 10GB GPU. Quantizing before
+    .to("cuda") keeps the move small.
+    """
+    from torchao.quantization import float8_weight_only, quantize_
+
+    for attr in ("transformer", "text_encoder", "text_encoder_2"):
+        comp = getattr(pipeline, attr, None)
+        if comp is not None:
+            quantize_(comp, float8_weight_only())
+            print(f"[startup] quantized {attr} -> float8 weight-only")
+
+
 # ---- load model ONCE at startup ----
 _dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16}[DTYPE]
 pipe = ZImagePipeline.from_pretrained(MODEL_ID, torch_dtype=_dtype, low_cpu_mem_usage=False)
-if CPU_OFFLOAD:
+
+if QUANTIZATION == "fp8":
+    _quantize_fp8(pipe)
+    pipe.to("cuda")  # ~6GB, fits 10GB fully on-GPU (no offload needed -> faster)
+    print("[startup] fp8 mode: model resident on GPU")
+elif CPU_OFFLOAD:
     pipe.enable_model_cpu_offload()  # streams weights to GPU as needed -> fits ~10GB
 else:
     pipe.to("cuda")
@@ -161,4 +185,10 @@ def retrieve_model(model: str):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "model": MODEL_ID, "served_as": MODEL_NAME}
+    return {
+        "status": "ok",
+        "model": MODEL_ID,
+        "served_as": MODEL_NAME,
+        "dtype": DTYPE,
+        "quantization": QUANTIZATION,
+    }

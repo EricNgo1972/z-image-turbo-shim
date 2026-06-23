@@ -5,3 +5,5 @@ torch>=2.4
 diffusers>=0.32
 transformers>=4.46
 accelerate>=1.0
+# Optional: required only when QUANTIZATION=fp8
+torchao>=0.7

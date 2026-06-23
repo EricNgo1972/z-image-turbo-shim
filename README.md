@@ -17,9 +17,21 @@ commercial use (e.g. social media posting).
 
 ## Requirements
 
-- NVIDIA GPU. Z-Image-Turbo fits ~10 GB VRAM with `CPU_OFFLOAD=1` (default).
-  Use the **FP8** checkpoint / `DTYPE=float16` if you hit out-of-memory.
-- Python 3.10+ (or Docker + NVIDIA Container Toolkit).
+- NVIDIA GPU. Python 3.10+ (or Docker + NVIDIA Container Toolkit).
+
+### Picking precision for your VRAM
+
+Z-Image-Turbo is a 6B model. Choose based on your card:
+
+| VRAM | Recommended | Settings |
+|---|---|---|
+| **10–14 GB** | **fp8** (fully on-GPU, fast) | `QUANTIZATION=fp8` |
+| 16 GB+ | bf16 native | `QUANTIZATION=none`, `CPU_OFFLOAD=0` |
+| <10 GB or fallback | bf16 + CPU offload (slower) | `QUANTIZATION=none`, `CPU_OFFLOAD=1` |
+
+> **10 GB cards (e.g. RTX 3080):** use `QUANTIZATION=fp8`. Native bf16 needs 12–16 GB and
+> would otherwise fall back to CPU offload, which is much slower. fp8 needs `torchao`
+> (already in `requirements.txt`).
 
 ## Run (local)
 
@@ -168,8 +180,9 @@ See [`.env.example`](.env.example). Key vars:
 | `PUBLIC_BASE` | `http://localhost:8000` | URL clients use to fetch images when `response_format=url`. |
 | `MODEL_ID` | `Tongyi-MAI/Z-Image-Turbo` | Model to load. |
 | `MODEL_NAME` | `z-image-turbo` | Name advertised via `/v1/models` and expected as the request `model`. |
-| `DTYPE` | `bfloat16` | `bfloat16` or `float16`. |
-| `CPU_OFFLOAD` | `1` | Stream weights to GPU on demand (low VRAM). |
+| `DTYPE` | `bfloat16` | Compute dtype: `bfloat16` or `float16`. |
+| `QUANTIZATION` | `none` | `none` or `fp8`. `fp8` = torchao float8 weight-only (~6 GB, fully on-GPU). **Recommended for 10 GB cards.** |
+| `CPU_OFFLOAD` | `1` | Stream weights to GPU on demand (low VRAM). Ignored when `QUANTIZATION=fp8`. |
 | `IMG_DIR` | `images` | Where `url`-mode images are written. |
 | `IMG_TTL_SECONDS` | `3600` | Auto-delete `url`-mode images older than this. |
 
