@@ -1,0 +1,33 @@
+services:
+  z-image-shim:
+    build: .
+    image: z-image-turbo-shim
+    container_name: z-image-shim
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    # Config comes from .env (copy from .env.example). See README "Configuration".
+    env_file:
+      - .env
+    volumes:
+      # Persist downloaded model weights across restarts/rebuilds.
+      - hf-cache:/root/.cache/huggingface
+      # Persist url-mode generated images (matches IMG_DIR=images default).
+      - ./images:/app/images
+    # GPU access (requires NVIDIA Container Toolkit on the host).
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://localhost:8000/health',timeout=5).status==200 else sys.exit(1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 300s  # allow first-run model download before marking healthy
+
+volumes:
+  hf-cache:

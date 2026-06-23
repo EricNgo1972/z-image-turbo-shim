@@ -62,7 +62,7 @@ cp .env.example .env        # then edit .env: set API_KEY, PUBLIC_BASE, etc.
 
 (For private changes you can also `scp -r ./z-image-turbo-shim you@your-gpu-server:~/`.)
 
-### Option A — Docker (recommended)
+### Option A — Docker Compose (recommended)
 
 Requires Docker + the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
 (`nvidia-ctk`) installed on the host. Verify GPU access first:
@@ -71,7 +71,29 @@ Requires Docker + the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacen
 docker run --rm --gpus all nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi
 ```
 
-Build and run (model weights cached in a named volume so they survive restarts):
+Then build and start with [`docker-compose.yml`](docker-compose.yml) (reads `.env`,
+persists model weights in a named volume, requests the GPU, has a healthcheck):
+
+```bash
+docker compose up -d --build
+docker compose logs -f             # watch first-run model download
+```
+
+Update later:
+
+```bash
+git pull && docker compose up -d --build
+```
+
+Stop / remove:
+
+```bash
+docker compose down                # add -v to also drop the cached model weights
+```
+
+### Option A2 — Plain `docker run`
+
+If you prefer not to use Compose:
 
 ```bash
 docker build -t z-image-turbo-shim .
@@ -83,16 +105,6 @@ docker run -d --name z-image-shim --restart unless-stopped \
   z-image-turbo-shim
 
 docker logs -f z-image-shim        # watch first-run model download
-```
-
-Update later:
-
-```bash
-git pull && docker build -t z-image-turbo-shim . \
-  && docker rm -f z-image-shim \
-  && docker run -d --name z-image-shim --restart unless-stopped \
-       --gpus all -p 8000:8000 --env-file .env \
-       -v hf-cache:/root/.cache/huggingface z-image-turbo-shim
 ```
 
 ### Option B — Bare metal + systemd
