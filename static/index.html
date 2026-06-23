@@ -13,13 +13,15 @@
     line-height: 1.5;
   }
   h1 { font-size: 1.3rem; margin: 0 0 .25rem; }
-  p.sub { margin: 0 0 1.5rem; opacity: .7; font-size: .9rem; }
+  p.sub { margin: 0 0 1.25rem; opacity: .7; font-size: .9rem; }
   label { display: block; font-size: .8rem; font-weight: 600; margin: .75rem 0 .25rem; opacity: .85; }
   textarea, input, select {
     width: 100%; padding: .6rem .7rem; border: 1px solid #8884; border-radius: 8px;
     font: inherit; background: #8881;
   }
   textarea { resize: vertical; min-height: 80px; }
+  input[type=range] { padding: 0; }
+  input[type=file] { padding: .45rem; }
   .row { display: flex; gap: 1rem; flex-wrap: wrap; }
   .row > div { flex: 1; min-width: 130px; }
   button {
@@ -27,11 +29,20 @@
     background: #3b82f6; color: #fff; font: inherit; font-weight: 600; cursor: pointer;
   }
   button:disabled { opacity: .5; cursor: default; }
+  .tabs { display: flex; gap: .5rem; margin-bottom: 1rem; border-bottom: 1px solid #8883; }
+  .tab {
+    margin: 0; background: none; color: inherit; border: 0; border-bottom: 2px solid transparent;
+    border-radius: 0; padding: .5rem .8rem; font-weight: 600; opacity: .6; cursor: pointer;
+  }
+  .tab.active { opacity: 1; border-bottom-color: #3b82f6; }
+  .panel { display: none; }
+  .panel.active { display: block; }
   #status { margin-top: 1rem; font-size: .9rem; min-height: 1.4em; }
   #status.err { color: #ef4444; }
   #result { margin-top: 1.2rem; }
   #result img { max-width: 100%; border-radius: 10px; border: 1px solid #8884; }
   .meta { font-size: .8rem; opacity: .7; margin-top: .4rem; }
+  .hint { font-size: .75rem; opacity: .6; margin-top: .25rem; }
   details { margin-top: 1.5rem; font-size: .85rem; }
 </style>
 </head>
@@ -39,103 +50,181 @@
   <h1>z-image-turbo-shim</h1>
   <p class="sub">Test image generation directly against this server's OpenAI-compatible API.</p>
 
-  <label for="prompt">Prompt</label>
-  <textarea id="prompt" placeholder="a cozy coffee shop at golden hour, photorealistic, 85mm">a red panda astronaut, studio lighting, photorealistic</textarea>
+  <label for="apikey">API key (if the server requires one)</label>
+  <input id="apikey" type="password" placeholder="sk-..." />
 
-  <div class="row">
-    <div>
-      <label for="size">Size</label>
-      <select id="size">
-        <option>1024x1024</option>
-        <option>1024x1536</option>
-        <option>1536x1024</option>
-        <option>768x768</option>
-      </select>
-    </div>
-    <div>
-      <label for="seed">Seed (optional)</label>
-      <input id="seed" type="number" placeholder="random" />
-    </div>
-    <div>
-      <label for="apikey">API key (if required)</label>
-      <input id="apikey" type="password" placeholder="sk-..." />
-    </div>
+  <div class="tabs">
+    <button class="tab active" data-tab="gen">Generate (txt2img)</button>
+    <button class="tab" data-tab="edit">Edit (img2img)</button>
   </div>
 
-  <button id="go">Generate</button>
+  <!-- txt2img -->
+  <div class="panel active" id="panel-gen">
+    <label for="g-prompt">Prompt</label>
+    <textarea id="g-prompt" placeholder="a cozy coffee shop at golden hour, photorealistic, 85mm">a red panda astronaut, studio lighting, photorealistic</textarea>
+    <div class="row">
+      <div>
+        <label for="g-size">Size</label>
+        <select id="g-size">
+          <option>1024x1024</option><option>1024x1536</option>
+          <option>1536x1024</option><option>768x768</option>
+        </select>
+      </div>
+      <div>
+        <label for="g-seed">Seed (optional)</label>
+        <input id="g-seed" type="number" placeholder="random" />
+      </div>
+    </div>
+    <button id="g-go">Generate</button>
+  </div>
+
+  <!-- img2img -->
+  <div class="panel" id="panel-edit">
+    <label for="e-image">Input image (required)</label>
+    <input id="e-image" type="file" accept="image/*" />
+    <label for="e-mask">Mask (optional — transparent areas get edited)</label>
+    <input id="e-mask" type="file" accept="image/*" />
+    <label for="e-prompt">Prompt</label>
+    <textarea id="e-prompt" placeholder="make it a watercolor painting, soft pastel tones">make it a watercolor painting, soft pastel tones, artistic</textarea>
+    <div class="row">
+      <div>
+        <label for="e-strength">Strength: <span id="e-strength-val">0.6</span></label>
+        <input id="e-strength" type="range" min="0" max="1" step="0.05" value="0.6" />
+        <div class="hint">Low = closer to original · High = more change</div>
+      </div>
+      <div>
+        <label for="e-size">Size</label>
+        <select id="e-size">
+          <option>1024x1024</option><option>1024x1536</option>
+          <option>1536x1024</option><option>768x768</option>
+        </select>
+      </div>
+      <div>
+        <label for="e-seed">Seed (optional)</label>
+        <input id="e-seed" type="number" placeholder="random" />
+      </div>
+    </div>
+    <button id="e-go">Transform</button>
+  </div>
+
   <div id="status"></div>
   <div id="result"></div>
 
   <details>
     <summary>About</summary>
-    <p>This page POSTs to <code>/v1/images/generations</code> with
-    <code>response_format: "b64_json"</code> and renders the returned image.
-    The API key is stored in your browser's localStorage only.</p>
+    <p><b>Generate</b> POSTs to <code>/v1/images/generations</code> (JSON).
+    <b>Edit</b> POSTs to <code>/v1/images/edits</code> (multipart) for img2img.
+    Both render the returned image. The API key is stored in your browser's localStorage only.</p>
   </details>
 
 <script>
   const $ = (id) => document.getElementById(id);
-  const statusEl = $("status"), resultEl = $("result"), btn = $("go");
+  const statusEl = $("status"), resultEl = $("result");
 
-  // remember API key locally for convenience
+  // API key persistence
   $("apikey").value = localStorage.getItem("shim_api_key") || "";
   $("apikey").addEventListener("change", (e) =>
     localStorage.setItem("shim_api_key", e.target.value));
+
+  // tabs
+  document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => {
+    document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
+    document.querySelectorAll(".panel").forEach((x) => x.classList.remove("active"));
+    t.classList.add("active");
+    $("panel-" + t.dataset.tab).classList.add("active");
+  }));
+
+  // strength label
+  $("e-strength").addEventListener("input", (e) => $("e-strength-val").textContent = e.target.value);
 
   function setStatus(msg, isErr = false) {
     statusEl.textContent = msg;
     statusEl.className = isErr ? "err" : "";
   }
+  function authHeaders(base = {}) {
+    const key = $("apikey").value.trim();
+    if (key) base["Authorization"] = "Bearer " + key;
+    return base;
+  }
+  function showResult(b64, metaText) {
+    resultEl.innerHTML =
+      '<img src="data:image/png;base64,' + b64 + '" alt="result" />' +
+      '<div class="meta">' + metaText + '</div>';
+  }
+  async function errMessage(resp) {
+    let detail = resp.statusText;
+    try { detail = (await resp.json())?.error?.message || detail; } catch {}
+    return "HTTP " + resp.status + ": " + detail;
+  }
 
   async function generate() {
-    const prompt = $("prompt").value.trim();
+    const prompt = $("g-prompt").value.trim();
     if (!prompt) { setStatus("Enter a prompt.", true); return; }
-
-    const body = {
-      model: "z-image-turbo",
-      prompt,
-      n: 1,
-      size: $("size").value,
-      response_format: "b64_json",
-    };
-    const seed = $("seed").value.trim();
+    const body = { model: "z-image-turbo", prompt, n: 1,
+      size: $("g-size").value, response_format: "b64_json" };
+    const seed = $("g-seed").value.trim();
     if (seed !== "") body.seed = parseInt(seed, 10);
 
-    const headers = { "Content-Type": "application/json" };
-    const key = $("apikey").value.trim();
-    if (key) headers["Authorization"] = "Bearer " + key;
-
-    btn.disabled = true;
+    $("g-go").disabled = true;
     setStatus("Generating… (can take a while on small GPUs)");
     const t0 = performance.now();
     try {
       const resp = await fetch("/v1/images/generations", {
-        method: "POST", headers, body: JSON.stringify(body),
+        method: "POST", headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify(body),
       });
-      if (!resp.ok) {
-        let detail = resp.statusText;
-        try { detail = (await resp.json())?.error?.message || detail; } catch {}
-        throw new Error("HTTP " + resp.status + ": " + detail);
-      }
+      if (!resp.ok) throw new Error(await errMessage(resp));
       const data = await resp.json();
-      const b64 = data.data[0].b64_json;
       const secs = ((performance.now() - t0) / 1000).toFixed(1);
-      resultEl.innerHTML =
-        '<img src="data:image/png;base64,' + b64 + '" alt="result" />' +
-        '<div class="meta">Size ' + body.size +
-        (body.seed != null ? " · seed " + body.seed : "") +
-        " · " + secs + "s</div>";
+      showResult(data.data[0].b64_json,
+        "Size " + body.size + (body.seed != null ? " · seed " + body.seed : "") + " · " + secs + "s");
       setStatus("Done in " + secs + "s.");
-    } catch (e) {
-      setStatus(e.message, true);
-    } finally {
-      btn.disabled = false;
-    }
+    } catch (e) { setStatus(e.message, true); }
+    finally { $("g-go").disabled = false; }
   }
 
-  btn.addEventListener("click", generate);
-  $("prompt").addEventListener("keydown", (e) => {
+  async function transform() {
+    const file = $("e-image").files[0];
+    if (!file) { setStatus("Choose an input image.", true); return; }
+    const prompt = $("e-prompt").value.trim();
+    if (!prompt) { setStatus("Enter a prompt.", true); return; }
+
+    const form = new FormData();
+    form.append("image", file);
+    if ($("e-mask").files[0]) form.append("mask", $("e-mask").files[0]);
+    form.append("model", "z-image-turbo");
+    form.append("prompt", prompt);
+    form.append("n", "1");
+    form.append("size", $("e-size").value);
+    form.append("strength", $("e-strength").value);
+    form.append("response_format", "b64_json");
+    const seed = $("e-seed").value.trim();
+    if (seed !== "") form.append("seed", seed);
+
+    $("e-go").disabled = true;
+    setStatus("Transforming… (can take a while on small GPUs)");
+    const t0 = performance.now();
+    try {
+      const resp = await fetch("/v1/images/edits", {
+        method: "POST", headers: authHeaders(), body: form,
+      });
+      if (!resp.ok) throw new Error(await errMessage(resp));
+      const data = await resp.json();
+      const secs = ((performance.now() - t0) / 1000).toFixed(1);
+      showResult(data.data[0].b64_json,
+        "Size " + $("e-size").value + " · strength " + $("e-strength").value + " · " + secs + "s");
+      setStatus("Done in " + secs + "s.");
+    } catch (e) { setStatus(e.message, true); }
+    finally { $("e-go").disabled = false; }
+  }
+
+  $("g-go").addEventListener("click", generate);
+  $("e-go").addEventListener("click", transform);
+  $("g-prompt").addEventListener("keydown", (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") generate();
+  });
+  $("e-prompt").addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") transform();
   });
 </script>
 </body>

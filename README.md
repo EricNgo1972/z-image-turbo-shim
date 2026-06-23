@@ -192,9 +192,13 @@ See [`.env.example`](.env.example). Key vars:
 
 ## Test UI
 
-Open **`http://your-gpu-server:8000/`** in a browser for a minimal page to type a prompt,
-pick a size/seed, and view the generated image. If `API_KEY` is set, paste it into the
-key field (stored only in your browser's localStorage). Tip: Ctrl/Cmd+Enter generates.
+Open **`http://your-gpu-server:8000/`** in a browser. Two tabs:
+- **Generate (txt2img)** — prompt, size, seed → new image.
+- **Edit (img2img)** — upload an image (+ optional mask), prompt, **strength** slider, size,
+  seed → transformed image via `/v1/images/edits`.
+
+If `API_KEY` is set, paste it into the key field (stored only in your browser's
+localStorage). Tip: Ctrl/Cmd+Enter submits the active tab.
 
 ## API
 
