@@ -286,6 +286,10 @@ Advertises the single served model (OpenAI-compatible discovery).
 
 ### .NET (official OpenAI SDK)
 
+The server returns **HTTP 429** when its GPU queue is full (see
+[Concurrency & queueing](#concurrency--queueing)). The SDK surfaces that as a
+`ClientResultException` with `Status == 429`; retry it, honoring `Retry-After`.
+
 ```csharp
 // dotnet add package OpenAI
 using OpenAI.Images;
@@ -298,15 +302,40 @@ var client = new ImageClient(
         Endpoint = new Uri("http://your-gpu-server:8000/v1")
     });
 
-var result = await client.GenerateImageAsync(
+// Retry helper: retries only on 429, waiting for the server's Retry-After hint.
+static async Task<T> WithRetryAsync<T>(Func<Task<T>> action, int maxRetries = 5)
+{
+    for (var attempt = 0; ; attempt++)
+    {
+        try { return await action(); }
+        catch (ClientResultException ex) when (ex.Status == 429 && attempt < maxRetries)
+        {
+            // Prefer the server's Retry-After header; fall back to exponential backoff.
+            var raw = ex.GetRawResponse();
+            TimeSpan delay = TimeSpan.FromSeconds(Math.Pow(2, attempt));
+            if (raw is not null &&
+                raw.Headers.TryGetValue("Retry-After", out var ra) &&
+                int.TryParse(ra, out var secs))
+            {
+                delay = TimeSpan.FromSeconds(secs);
+            }
+            await Task.Delay(delay);
+        }
+    }
+}
+
+var result = await WithRetryAsync(() => client.GenerateImageAsync(
     "a cozy coffee shop at golden hour, photorealistic, 85mm",
     new ImageGenerationOptions {
         Size = GeneratedImageSize.W1024xH1024,
         ResponseFormat = GeneratedImageFormat.Bytes
-    });
+    }));
 
 await File.WriteAllBytesAsync("out.png", result.Value.ImageBytes.ToArray());
 ```
+
+> Tip: `WithRetryAsync` is generic, so it wraps `GenerateImageAsync`, raw `HttpClient`
+> edit calls, or anything else that can throw 429.
 
 ### curl
 
