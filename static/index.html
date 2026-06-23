@@ -41,6 +41,11 @@
   #status.err { color: #ef4444; }
   #result { margin-top: 1.2rem; }
   #result img { max-width: 100%; border-radius: 10px; border: 1px solid #8884; }
+  .compare { display: flex; gap: 1rem; flex-wrap: wrap; }
+  .compare figure { flex: 1; min-width: 200px; margin: 0; }
+  .compare figcaption { font-size: .75rem; font-weight: 600; opacity: .7; margin-bottom: .35rem; }
+  #e-preview { margin-top: .5rem; }
+  #e-preview img { max-height: 140px; border-radius: 8px; border: 1px solid #8884; }
   .meta { font-size: .8rem; opacity: .7; margin-top: .4rem; }
   .hint { font-size: .75rem; opacity: .6; margin-top: .25rem; }
   details { margin-top: 1.5rem; font-size: .85rem; }
@@ -82,6 +87,7 @@
   <div class="panel" id="panel-edit">
     <label for="e-image">Input image (required)</label>
     <input id="e-image" type="file" accept="image/*" />
+    <div id="e-preview"></div>
     <label for="e-mask">Mask (optional — transparent areas get edited)</label>
     <input id="e-mask" type="file" accept="image/*" />
     <label for="e-prompt">Prompt</label>
@@ -137,6 +143,19 @@
   // strength label
   $("e-strength").addEventListener("input", (e) => $("e-strength-val").textContent = e.target.value);
 
+  // input-image preview (also used as the "before" in the compare view)
+  let inputDataUrl = null;
+  $("e-image").addEventListener("change", () => {
+    const f = $("e-image").files[0];
+    if (!f) { inputDataUrl = null; $("e-preview").innerHTML = ""; return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      inputDataUrl = reader.result;
+      $("e-preview").innerHTML = '<img src="' + inputDataUrl + '" alt="input preview" />';
+    };
+    reader.readAsDataURL(f);
+  });
+
   function setStatus(msg, isErr = false) {
     statusEl.textContent = msg;
     statusEl.className = isErr ? "err" : "";
@@ -150,6 +169,15 @@
     resultEl.innerHTML =
       '<img src="data:image/png;base64,' + b64 + '" alt="result" />' +
       '<div class="meta">' + metaText + '</div>';
+  }
+  function showCompare(beforeSrc, afterB64, metaText) {
+    resultEl.innerHTML =
+      '<div class="compare">' +
+        '<figure><figcaption>Before</figcaption>' +
+          '<img src="' + beforeSrc + '" alt="before" /></figure>' +
+        '<figure><figcaption>After</figcaption>' +
+          '<img src="data:image/png;base64,' + afterB64 + '" alt="after" /></figure>' +
+      '</div><div class="meta">' + metaText + '</div>';
   }
   async function errMessage(resp) {
     let detail = resp.statusText;
@@ -211,7 +239,7 @@
       if (!resp.ok) throw new Error(await errMessage(resp));
       const data = await resp.json();
       const secs = ((performance.now() - t0) / 1000).toFixed(1);
-      showResult(data.data[0].b64_json,
+      showCompare(inputDataUrl, data.data[0].b64_json,
         "Size " + $("e-size").value + " · strength " + $("e-strength").value + " · " + secs + "s");
       setStatus("Done in " + secs + "s.");
     } catch (e) { setStatus(e.message, true); }
