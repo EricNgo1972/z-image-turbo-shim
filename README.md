@@ -144,6 +144,19 @@ curl -s http://localhost:8000/v1/images/generations \
   | python -c "import sys,json,base64; open('out.png','wb').write(base64.b64decode(json.load(sys.stdin)['data'][0]['b64_json']))"
 ```
 
+## Smoke test
+
+After the server is up, verify the whole path (health → models → one image):
+
+```bash
+python test_client.py
+# or against a remote box with auth:
+BASE_URL=http://your-gpu-server:8000 API_KEY=sk-local-changeme python test_client.py
+```
+
+Stdlib-only (no pip install). Saves `smoke_test.png` and exits non-zero on any failure,
+so it works in CI / deploy checks.
+
 ## Notes & limits
 
 - **One generation at a time.** A GPU lock serializes requests so small cards don't OOM;
