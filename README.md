@@ -55,6 +55,7 @@ See [`.env.example`](.env.example). Key vars:
 | `API_KEY` | _(unset)_ | If set, require `Authorization: Bearer <API_KEY>`. |
 | `PUBLIC_BASE` | `http://localhost:8000` | URL clients use to fetch images when `response_format=url`. |
 | `MODEL_ID` | `Tongyi-MAI/Z-Image-Turbo` | Model to load. |
+| `MODEL_NAME` | `z-image-turbo` | Name advertised via `/v1/models` and expected as the request `model`. |
 | `DTYPE` | `bfloat16` | `bfloat16` or `float16`. |
 | `CPU_OFFLOAD` | `1` | Stream weights to GPU on demand (low VRAM). |
 | `IMG_DIR` | `images` | Where `url`-mode images are written. |
@@ -86,10 +87,25 @@ Response:
 `size` accepts `WxH` (e.g. `1024x1024`, `1024x1536`, `1536x1024`) or `auto`.
 `response_format` is `b64_json` (default) or `url`.
 
+### `GET /v1/models`
+
+Advertises the single served model (OpenAI-compatible discovery).
+
+```json
+{
+  "object": "list",
+  "data": [
+    { "id": "z-image-turbo", "object": "model", "created": 0, "owned_by": "z-image-turbo-shim" }
+  ]
+}
+```
+
+`GET /v1/models/{model}` returns the same object for `z-image-turbo`, or 404 otherwise.
+
 ### `GET /health`
 
 ```json
-{ "status": "ok", "model": "Tongyi-MAI/Z-Image-Turbo" }
+{ "status": "ok", "model": "Tongyi-MAI/Z-Image-Turbo", "served_as": "z-image-turbo" }
 ```
 
 ## Client examples

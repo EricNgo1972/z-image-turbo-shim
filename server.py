@@ -18,6 +18,8 @@ from pydantic import BaseModel, Field
 
 # ---- config (via env) ----
 MODEL_ID = os.getenv("MODEL_ID", "Tongyi-MAI/Z-Image-Turbo")
+# Name advertised via /v1/models and the one clients should send as "model".
+MODEL_NAME = os.getenv("MODEL_NAME", "z-image-turbo")
 API_KEY = os.getenv("API_KEY")  # if set, require "Authorization: Bearer <API_KEY>"
 PUBLIC_BASE = os.getenv("PUBLIC_BASE", "http://localhost:8000")  # for response_format=url
 DTYPE = os.getenv("DTYPE", "bfloat16")  # "bfloat16" | "float16"
@@ -127,6 +129,28 @@ async def generate(req: ImageRequest, authorization: str | None = Header(default
     return {"created": int(time.time()), "data": data}
 
 
+def _model_object():
+    # OpenAI "model" object shape. created=0 (stable; no wall-clock at import).
+    return {
+        "id": MODEL_NAME,
+        "object": "model",
+        "created": 0,
+        "owned_by": "z-image-turbo-shim",
+    }
+
+
+@app.get("/v1/models")
+def list_models():
+    return {"object": "list", "data": [_model_object()]}
+
+
+@app.get("/v1/models/{model}")
+def retrieve_model(model: str):
+    if model != MODEL_NAME:
+        return _err(f"The model '{model}' does not exist.", "invalid_request_error", 404)
+    return _model_object()
+
+
 @app.get("/health")
 def health():
-    return {"status": "ok", "model": MODEL_ID}
+    return {"status": "ok", "model": MODEL_ID, "served_as": MODEL_NAME}
