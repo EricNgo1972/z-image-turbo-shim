@@ -11,9 +11,10 @@ import uuid
 
 import torch
 from diffusers import ZImagePipeline
-from fastapi import FastAPI, Header
+from fastapi import FastAPI, File, Form, Header, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from PIL import Image
 from pydantic import BaseModel, Field
 
 # ---- config (via env) ----
@@ -60,6 +61,19 @@ elif CPU_OFFLOAD:
     pipe.enable_model_cpu_offload()  # streams weights to GPU as needed -> fits ~10GB
 else:
     pipe.to("cuda")
+
+# img2img pipeline for /v1/images/edits. Reuses the SAME (already-quantized) model
+# components via from_pipe -> no extra VRAM. Degrades gracefully on older diffusers.
+try:
+    from diffusers import ZImageImg2ImgPipeline
+
+    img2img_pipe = ZImageImg2ImgPipeline.from_pipe(pipe)
+    EDITS_AVAILABLE = True
+    print("[startup] img2img (/v1/images/edits) enabled")
+except Exception as e:  # pragma: no cover - depends on installed diffusers version
+    img2img_pipe = None
+    EDITS_AVAILABLE = False
+    print(f"[startup] img2img unavailable, /v1/images/edits disabled: {e}")
 
 gpu_lock = asyncio.Lock()  # serialize generations: one at a time on small GPUs
 
@@ -111,6 +125,19 @@ def _cleanup_old_images():
             pass
 
 
+def _encode_image(image, response_format: str) -> dict:
+    """Serialize a PIL image to an OpenAI-style data entry (b64_json or url)."""
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    png = buf.getvalue()
+    if response_format == "url":
+        name = f"{uuid.uuid4().hex}.png"
+        with open(os.path.join(IMG_DIR, name), "wb") as f:
+            f.write(png)
+        return {"url": f"{PUBLIC_BASE}/images/{name}"}
+    return {"b64_json": base64.b64encode(png).decode()}
+
+
 @app.post("/v1/images/generations")
 async def generate(req: ImageRequest, authorization: str | None = Header(default=None)):
     if API_KEY and authorization != f"Bearer {API_KEY}":
@@ -142,20 +169,92 @@ async def generate(req: ImageRequest, authorization: str | None = Header(default
                 ).images[0]
 
             image = await asyncio.to_thread(_run)
-
-            buf = io.BytesIO()
-            image.save(buf, format="PNG")
-            png = buf.getvalue()
-
-            if req.response_format == "url":
-                name = f"{uuid.uuid4().hex}.png"
-                with open(os.path.join(IMG_DIR, name), "wb") as f:
-                    f.write(png)
-                data.append({"url": f"{PUBLIC_BASE}/images/{name}"})
-            else:
-                data.append({"b64_json": base64.b64encode(png).decode()})
+            data.append(_encode_image(image, req.response_format))
 
     if req.response_format == "url":
+        _cleanup_old_images()
+
+    return {"created": int(time.time()), "data": data}
+
+
+def _build_edit_mask(mask_bytes: bytes, size: tuple[int, int]):
+    """OpenAI mask semantics: areas to EDIT are transparent (alpha 0).
+
+    Returns an L-mode mask where 255 = edit (use generated), 0 = keep (use original),
+    suitable for Image.composite(generated, original, mask).
+    """
+    m = Image.open(io.BytesIO(mask_bytes)).resize(size)
+    if "A" in m.getbands():
+        src = m.getchannel("A")  # transparent -> edit
+    else:
+        src = m.convert("L")  # fallback convention: dark -> edit
+    return src.point(lambda v: 255 if v < 128 else 0)
+
+
+@app.post("/v1/images/edits")
+async def edits(
+    image: UploadFile = File(...),
+    prompt: str = Form(...),
+    mask: UploadFile | None = File(default=None),
+    model: str = Form("z-image-turbo"),
+    n: int = Form(1),
+    size: str = Form("1024x1024"),
+    response_format: str = Form("b64_json"),
+    strength: float = Form(0.6),  # extension: img2img denoise strength (0..1)
+    seed: int | None = Form(default=None),  # extension
+    authorization: str | None = Header(default=None),
+):
+    """OpenAI-compatible image edit (img2img). Optional mask = best-effort inpaint.
+
+    Multipart/form-data, mirroring POST /v1/images/edits.
+    """
+    if API_KEY and authorization != f"Bearer {API_KEY}":
+        return _err("Incorrect API key provided.", "invalid_api_key", 401)
+    if not EDITS_AVAILABLE:
+        return _err("Image edits not supported by this server's diffusers version.",
+                    "not_supported", 501)
+    if not 1 <= n <= 4:
+        return _err("n must be between 1 and 4.")
+    if response_format not in ("b64_json", "url"):
+        return _err(f"Invalid response_format: {response_format!r}.")
+    strength = max(0.0, min(1.0, strength))
+
+    try:
+        width, height = parse_size(size)
+    except Exception:
+        return _err(f"Invalid size: {size!r}. Use 'WxH' (e.g. '1024x1024') or 'auto'.")
+
+    init = Image.open(io.BytesIO(await image.read())).convert("RGB").resize((width, height))
+    edit_mask = None
+    if mask is not None:
+        edit_mask = _build_edit_mask(await mask.read(), (width, height))
+
+    data = []
+    async with gpu_lock:
+        for i in range(n):
+            generator = None
+            if seed is not None:
+                generator = torch.Generator("cuda").manual_seed(seed + i)
+
+            def _run():
+                return img2img_pipe(
+                    prompt=prompt,
+                    image=init,
+                    strength=strength,
+                    num_inference_steps=9,
+                    guidance_scale=0.0,
+                    generator=generator,
+                ).images[0]
+
+            result = await asyncio.to_thread(_run)
+            result = result.resize((width, height))
+            if edit_mask is not None:
+                # keep original outside the mask (best-effort inpaint; Turbo isn't
+                # inpaint-trained, so this composites rather than context-fills)
+                result = Image.composite(result, init, edit_mask)
+            data.append(_encode_image(result, response_format))
+
+    if response_format == "url":
         _cleanup_old_images()
 
     return {"created": int(time.time()), "data": data}
@@ -191,4 +290,5 @@ def health():
         "served_as": MODEL_NAME,
         "dtype": DTYPE,
         "quantization": QUANTIZATION,
+        "edits": EDITS_AVAILABLE,
     }

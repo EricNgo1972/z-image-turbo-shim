@@ -4,9 +4,8 @@ FROM pytorch/pytorch:2.4.0-cuda12.1-cudnn9-runtime
 WORKDIR /app
 
 COPY requirements.txt .
-# torch already ships in the base image; install the rest.
-RUN pip install --no-cache-dir fastapi "uvicorn[standard]" "pydantic>=2.7" \
-    "diffusers>=0.32" "transformers>=4.46" "accelerate>=1.0"
+# torch ships in the base image; pip treats the pinned torch as already satisfied.
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY server.py .
 COPY static ./static

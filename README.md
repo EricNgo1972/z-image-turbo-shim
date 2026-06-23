@@ -222,6 +222,39 @@ Response:
 `size` accepts `WxH` (e.g. `1024x1024`, `1024x1536`, `1536x1024`) or `auto`.
 `response_format` is `b64_json` (default) or `url`.
 
+### `POST /v1/images/edits`
+
+img2img — transform an existing image with a prompt (OpenAI-compatible, **multipart/form-data**).
+Backed by `ZImageImg2ImgPipeline`, sharing the already-loaded model (no extra VRAM).
+
+| Field | Required | Default | Notes |
+|---|---|---|---|
+| `image` | ✅ | — | The input image (file). |
+| `prompt` | ✅ | — | What to change it into. |
+| `mask` | | — | Best-effort inpaint: transparent areas = edit. See caveat below. |
+| `size` | | `1024x1024` | Output `WxH`; input is resized to this. |
+| `strength` | | `0.6` | Extension: img2img denoise 0–1. Lower = closer to original. |
+| `seed` | | random | Extension. |
+| `n` | | `1` | 1–4 (sequential). |
+| `response_format` | | `b64_json` | `b64_json` or `url`. |
+
+```bash
+curl -s http://localhost:8000/v1/images/edits \
+  -H "Authorization: Bearer sk-local-changeme" \
+  -F image=@input.png \
+  -F prompt="make it a watercolor painting" \
+  -F strength=0.6 \
+  | python -c "import sys,json,base64; open('out.png','wb').write(base64.b64decode(json.load(sys.stdin)['data'][0]['b64_json']))"
+```
+
+Returns the same `{ "created", "data": [...] }` shape as generations.
+
+> **Mask / inpaint caveat:** Z-Image-Turbo isn't inpaint-trained. With a `mask`, the
+> server runs img2img on the whole image then composites the original back outside the
+> mask — fine for moderate edits, not aggressive object replacement. Use `strength`
+> ~0.4–0.7. If your diffusers version lacks `ZImageImg2ImgPipeline`, this endpoint
+> returns `501` and `/health` shows `"edits": false`.
+
 ### `GET /v1/models`
 
 Advertises the single served model (OpenAI-compatible discovery).
