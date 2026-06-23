@@ -46,6 +46,106 @@ docker run --gpus all -p 8000:8000 \
   z-image-turbo-shim
 ```
 
+## Deploy to your GPU server
+
+Assumes the server has an NVIDIA GPU + driver. Replace `you@your-gpu-server` and paths
+to match your box.
+
+### Step 1 — Get the code onto the server
+
+```bash
+# on the GPU server
+git clone https://github.com/EricNgo1972/z-image-turbo-shim.git
+cd z-image-turbo-shim
+cp .env.example .env        # then edit .env: set API_KEY, PUBLIC_BASE, etc.
+```
+
+(For private changes you can also `scp -r ./z-image-turbo-shim you@your-gpu-server:~/`.)
+
+### Option A — Docker (recommended)
+
+Requires Docker + the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+(`nvidia-ctk`) installed on the host. Verify GPU access first:
+
+```bash
+docker run --rm --gpus all nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi
+```
+
+Build and run (model weights cached in a named volume so they survive restarts):
+
+```bash
+docker build -t z-image-turbo-shim .
+
+docker run -d --name z-image-shim --restart unless-stopped \
+  --gpus all -p 8000:8000 \
+  --env-file .env \
+  -v hf-cache:/root/.cache/huggingface \
+  z-image-turbo-shim
+
+docker logs -f z-image-shim        # watch first-run model download
+```
+
+Update later:
+
+```bash
+git pull && docker build -t z-image-turbo-shim . \
+  && docker rm -f z-image-shim \
+  && docker run -d --name z-image-shim --restart unless-stopped \
+       --gpus all -p 8000:8000 --env-file .env \
+       -v hf-cache:/root/.cache/huggingface z-image-turbo-shim
+```
+
+### Option B — Bare metal + systemd
+
+```bash
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r requirements.txt
+```
+
+Create `/etc/systemd/system/z-image-shim.service` (adjust `User` and `WorkingDirectory`):
+
+```ini
+[Unit]
+Description=z-image-turbo-shim
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=you
+WorkingDirectory=/home/you/z-image-turbo-shim
+EnvironmentFile=/home/you/z-image-turbo-shim/.env
+ExecStart=/home/you/z-image-turbo-shim/.venv/bin/uvicorn server:app --host 0.0.0.0 --port 8000 --workers 1
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable and start:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now z-image-shim
+journalctl -u z-image-shim -f        # watch logs / first-run download
+```
+
+### Step 2 — Verify the deploy
+
+From the server (or any machine that can reach it):
+
+```bash
+BASE_URL=http://localhost:8000 API_KEY=sk-local-changeme python test_client.py
+```
+
+### Step 3 — Make it reachable + safe
+
+- **Open the port / firewall:** allow TCP 8000 only from trusted sources
+  (e.g. `sudo ufw allow from <app-server-ip> to any port 8000`).
+- **Always set `API_KEY`** if the port is reachable beyond localhost.
+- **TLS (recommended):** put nginx/Caddy in front to terminate HTTPS and proxy to
+  `127.0.0.1:8000`, then point `PUBLIC_BASE` and your .NET `Endpoint` at the HTTPS URL.
+
 ## Configuration
 
 See [`.env.example`](.env.example). Key vars:
