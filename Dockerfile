@@ -9,6 +9,7 @@ RUN pip install --no-cache-dir fastapi "uvicorn[standard]" "pydantic>=2.7" \
     "diffusers>=0.32" "transformers>=4.46" "accelerate>=1.0"
 
 COPY server.py .
+COPY static ./static
 
 EXPOSE 8000
 # Single worker on purpose: load the model once, avoid OOM on small GPUs.

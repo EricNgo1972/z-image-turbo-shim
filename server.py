@@ -12,7 +12,7 @@ import uuid
 import torch
 from diffusers import ZImagePipeline
 from fastapi import FastAPI, Header
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -41,6 +41,14 @@ gpu_lock = asyncio.Lock()  # serialize generations: one at a time on small GPUs
 
 app = FastAPI(title="z-image-turbo-shim")
 app.mount("/images", StaticFiles(directory=IMG_DIR), name="images")
+
+STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+
+
+@app.get("/")
+def ui():
+    """Minimal browser UI for testing image generation."""
+    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
 
 
 # ---- OpenAI-compatible request schema ----

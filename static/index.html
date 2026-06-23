@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>z-image-turbo-shim · test UI</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    margin: 0; padding: 2rem; max-width: 880px; margin-inline: auto;
+    line-height: 1.5;
+  }
+  h1 { font-size: 1.3rem; margin: 0 0 .25rem; }
+  p.sub { margin: 0 0 1.5rem; opacity: .7; font-size: .9rem; }
+  label { display: block; font-size: .8rem; font-weight: 600; margin: .75rem 0 .25rem; opacity: .85; }
+  textarea, input, select {
+    width: 100%; padding: .6rem .7rem; border: 1px solid #8884; border-radius: 8px;
+    font: inherit; background: #8881;
+  }
+  textarea { resize: vertical; min-height: 80px; }
+  .row { display: flex; gap: 1rem; flex-wrap: wrap; }
+  .row > div { flex: 1; min-width: 130px; }
+  button {
+    margin-top: 1.2rem; padding: .7rem 1.4rem; border: 0; border-radius: 8px;
+    background: #3b82f6; color: #fff; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button:disabled { opacity: .5; cursor: default; }
+  #status { margin-top: 1rem; font-size: .9rem; min-height: 1.4em; }
+  #status.err { color: #ef4444; }
+  #result { margin-top: 1.2rem; }
+  #result img { max-width: 100%; border-radius: 10px; border: 1px solid #8884; }
+  .meta { font-size: .8rem; opacity: .7; margin-top: .4rem; }
+  details { margin-top: 1.5rem; font-size: .85rem; }
+</style>
+</head>
+<body>
+  <h1>z-image-turbo-shim</h1>
+  <p class="sub">Test image generation directly against this server's OpenAI-compatible API.</p>
+
+  <label for="prompt">Prompt</label>
+  <textarea id="prompt" placeholder="a cozy coffee shop at golden hour, photorealistic, 85mm">a red panda astronaut, studio lighting, photorealistic</textarea>
+
+  <div class="row">
+    <div>
+      <label for="size">Size</label>
+      <select id="size">
+        <option>1024x1024</option>
+        <option>1024x1536</option>
+        <option>1536x1024</option>
+        <option>768x768</option>
+      </select>
+    </div>
+    <div>
+      <label for="seed">Seed (optional)</label>
+      <input id="seed" type="number" placeholder="random" />
+    </div>
+    <div>
+      <label for="apikey">API key (if required)</label>
+      <input id="apikey" type="password" placeholder="sk-..." />
+    </div>
+  </div>
+
+  <button id="go">Generate</button>
+  <div id="status"></div>
+  <div id="result"></div>
+
+  <details>
+    <summary>About</summary>
+    <p>This page POSTs to <code>/v1/images/generations</code> with
+    <code>response_format: "b64_json"</code> and renders the returned image.
+    The API key is stored in your browser's localStorage only.</p>
+  </details>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const statusEl = $("status"), resultEl = $("result"), btn = $("go");
+
+  // remember API key locally for convenience
+  $("apikey").value = localStorage.getItem("shim_api_key") || "";
+  $("apikey").addEventListener("change", (e) =>
+    localStorage.setItem("shim_api_key", e.target.value));
+
+  function setStatus(msg, isErr = false) {
+    statusEl.textContent = msg;
+    statusEl.className = isErr ? "err" : "";
+  }
+
+  async function generate() {
+    const prompt = $("prompt").value.trim();
+    if (!prompt) { setStatus("Enter a prompt.", true); return; }
+
+    const body = {
+      model: "z-image-turbo",
+      prompt,
+      n: 1,
+      size: $("size").value,
+      response_format: "b64_json",
+    };
+    const seed = $("seed").value.trim();
+    if (seed !== "") body.seed = parseInt(seed, 10);
+
+    const headers = { "Content-Type": "application/json" };
+    const key = $("apikey").value.trim();
+    if (key) headers["Authorization"] = "Bearer " + key;
+
+    btn.disabled = true;
+    setStatus("Generating… (can take a while on small GPUs)");
+    const t0 = performance.now();
+    try {
+      const resp = await fetch("/v1/images/generations", {
+        method: "POST", headers, body: JSON.stringify(body),
+      });
+      if (!resp.ok) {
+        let detail = resp.statusText;
+        try { detail = (await resp.json())?.error?.message || detail; } catch {}
+        throw new Error("HTTP " + resp.status + ": " + detail);
+      }
+      const data = await resp.json();
+      const b64 = data.data[0].b64_json;
+      const secs = ((performance.now() - t0) / 1000).toFixed(1);
+      resultEl.innerHTML =
+        '<img src="data:image/png;base64,' + b64 + '" alt="result" />' +
+        '<div class="meta">Size ' + body.size +
+        (body.seed != null ? " · seed " + body.seed : "") +
+        " · " + secs + "s</div>";
+      setStatus("Done in " + secs + "s.");
+    } catch (e) {
+      setStatus(e.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  btn.addEventListener("click", generate);
+  $("prompt").addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") generate();
+  });
+</script>
+</body>
+</html>
