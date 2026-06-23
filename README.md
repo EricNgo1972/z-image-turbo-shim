@@ -186,6 +186,10 @@ See [`.env.example`](.env.example). Key vars:
 | `IMG_DIR` | `images` | Where `url`-mode images are written. |
 | `IMG_TTL_SECONDS` | `3600` | Auto-delete `url`-mode images older than this. |
 
+> **Default** = the value used when the variable is **unset**. The shipped
+> [`.env.example`](.env.example) overrides some of these with recommended values for a
+> 10 GB GPU — notably **`QUANTIZATION=fp8`**. Copy it to `.env` and adjust as needed.
+
 ## Test UI
 
 Open **`http://your-gpu-server:8000/`** in a browser for a minimal page to type a prompt,
