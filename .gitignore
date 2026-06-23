@@ -1,0 +1,23 @@
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# generated images (url response_format)
+images/
+
+# model cache / weights
+*.safetensors
+*.bin
+*.gguf
+.cache/
+
+# env / secrets
+.env
+
+# os / editor
+.DS_Store
+.idea/
+.vscode/
