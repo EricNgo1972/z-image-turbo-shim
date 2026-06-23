@@ -4,6 +4,7 @@
 # OpenAI/Azure SDK works by swapping the base URL and model name.
 import asyncio
 import base64
+import contextlib
 import io
 import os
 import time
@@ -29,6 +30,10 @@ QUANTIZATION = os.getenv("QUANTIZATION", "none").lower()
 CPU_OFFLOAD = os.getenv("CPU_OFFLOAD", "1") == "1"  # keep VRAM low (ignored when fp8)
 IMG_DIR = os.getenv("IMG_DIR", "images")
 IMG_TTL_SECONDS = int(os.getenv("IMG_TTL_SECONDS", "3600"))  # url-mode cleanup age
+# Max requests allowed in the GPU queue (1 running + the rest waiting). Beyond this,
+# new requests get HTTP 429 instead of piling up. Keep small on single-GPU boxes.
+MAX_QUEUE = int(os.getenv("MAX_QUEUE", "8"))
+RETRY_AFTER = int(os.getenv("RETRY_AFTER", "10"))  # seconds hint sent with 429
 
 os.makedirs(IMG_DIR, exist_ok=True)
 
@@ -75,7 +80,56 @@ except Exception as e:  # pragma: no cover - depends on installed diffusers vers
     EDITS_AVAILABLE = False
     print(f"[startup] img2img unavailable, /v1/images/edits disabled: {e}")
 
-gpu_lock = asyncio.Lock()  # serialize generations: one at a time on small GPUs
+class QueueFull(Exception):
+    """Raised when the GPU queue is at capacity."""
+
+
+class GpuQueue:
+    """Serializes GPU work (one job at a time) with a bounded waiting queue.
+
+    `depth` counts everything in the system (the running job + waiters). Acquiring
+    a slot beyond `limit` raises QueueFull so the caller can return HTTP 429 instead
+    of letting requests pile up unbounded. Single-event-loop only (run --workers 1).
+    """
+
+    def __init__(self, limit: int):
+        self._lock = asyncio.Lock()
+        self._limit = limit
+        self._depth = 0
+
+    @property
+    def depth(self) -> int:
+        return self._depth
+
+    @property
+    def running(self) -> bool:
+        return self._lock.locked()
+
+    @contextlib.asynccontextmanager
+    async def slot(self):
+        # No await between the check and increment -> atomic on one event loop.
+        if self._depth >= self._limit:
+            raise QueueFull()
+        self._depth += 1
+        try:
+            async with self._lock:
+                yield
+        finally:
+            self._depth -= 1
+
+
+gpu_queue = GpuQueue(MAX_QUEUE)
+
+
+def _busy():
+    return JSONResponse(
+        status_code=429,
+        content={"error": {
+            "message": "Server busy: GPU queue is full. Retry shortly.",
+            "type": "rate_limit_exceeded",
+        }},
+        headers={"Retry-After": str(RETRY_AFTER)},
+    )
 
 app = FastAPI(title="z-image-turbo-shim")
 app.mount("/images", StaticFiles(directory=IMG_DIR), name="images")
@@ -152,24 +206,27 @@ async def generate(req: ImageRequest, authorization: str | None = Header(default
         return _err(f"Invalid response_format: {req.response_format!r}.")
 
     data = []
-    async with gpu_lock:  # protect the GPU from concurrent requests
-        for i in range(req.n):
-            generator = None
-            if req.seed is not None:
-                generator = torch.Generator("cuda").manual_seed(req.seed + i)
+    try:
+        async with gpu_queue.slot():  # serialize + bounded queue (429 when full)
+            for i in range(req.n):
+                generator = None
+                if req.seed is not None:
+                    generator = torch.Generator("cuda").manual_seed(req.seed + i)
 
-            def _run():
-                return pipe(
-                    prompt=req.prompt,
-                    num_inference_steps=9,  # Turbo: ~8 DiT forwards
-                    guidance_scale=0.0,  # MUST be 0 for the Turbo model
-                    width=width,
-                    height=height,
-                    generator=generator,
-                ).images[0]
+                def _run():
+                    return pipe(
+                        prompt=req.prompt,
+                        num_inference_steps=9,  # Turbo: ~8 DiT forwards
+                        guidance_scale=0.0,  # MUST be 0 for the Turbo model
+                        width=width,
+                        height=height,
+                        generator=generator,
+                    ).images[0]
 
-            image = await asyncio.to_thread(_run)
-            data.append(_encode_image(image, req.response_format))
+                image = await asyncio.to_thread(_run)
+                data.append(_encode_image(image, req.response_format))
+    except QueueFull:
+        return _busy()
 
     if req.response_format == "url":
         _cleanup_old_images()
@@ -224,35 +281,42 @@ async def edits(
     except Exception:
         return _err(f"Invalid size: {size!r}. Use 'WxH' (e.g. '1024x1024') or 'auto'.")
 
+    # Soft early reject so we don't buffer the upload when the queue is already full.
+    if gpu_queue.depth >= MAX_QUEUE:
+        return _busy()
+
     init = Image.open(io.BytesIO(await image.read())).convert("RGB").resize((width, height))
     edit_mask = None
     if mask is not None:
         edit_mask = _build_edit_mask(await mask.read(), (width, height))
 
     data = []
-    async with gpu_lock:
-        for i in range(n):
-            generator = None
-            if seed is not None:
-                generator = torch.Generator("cuda").manual_seed(seed + i)
+    try:
+        async with gpu_queue.slot():  # serialize + bounded queue (429 when full)
+            for i in range(n):
+                generator = None
+                if seed is not None:
+                    generator = torch.Generator("cuda").manual_seed(seed + i)
 
-            def _run():
-                return img2img_pipe(
-                    prompt=prompt,
-                    image=init,
-                    strength=strength,
-                    num_inference_steps=9,
-                    guidance_scale=0.0,
-                    generator=generator,
-                ).images[0]
+                def _run():
+                    return img2img_pipe(
+                        prompt=prompt,
+                        image=init,
+                        strength=strength,
+                        num_inference_steps=9,
+                        guidance_scale=0.0,
+                        generator=generator,
+                    ).images[0]
 
-            result = await asyncio.to_thread(_run)
-            result = result.resize((width, height))
-            if edit_mask is not None:
-                # keep original outside the mask (best-effort inpaint; Turbo isn't
-                # inpaint-trained, so this composites rather than context-fills)
-                result = Image.composite(result, init, edit_mask)
-            data.append(_encode_image(result, response_format))
+                result = await asyncio.to_thread(_run)
+                result = result.resize((width, height))
+                if edit_mask is not None:
+                    # keep original outside the mask (best-effort inpaint; Turbo isn't
+                    # inpaint-trained, so this composites rather than context-fills)
+                    result = Image.composite(result, init, edit_mask)
+                data.append(_encode_image(result, response_format))
+    except QueueFull:
+        return _busy()
 
     if response_format == "url":
         _cleanup_old_images()
@@ -291,4 +355,9 @@ def health():
         "dtype": DTYPE,
         "quantization": QUANTIZATION,
         "edits": EDITS_AVAILABLE,
+        "queue": {
+            "running": gpu_queue.running,
+            "depth": gpu_queue.depth,  # running + waiting
+            "limit": MAX_QUEUE,
+        },
     }

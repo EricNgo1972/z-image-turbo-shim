@@ -185,6 +185,8 @@ See [`.env.example`](.env.example). Key vars:
 | `CPU_OFFLOAD` | `1` | Stream weights to GPU on demand (low VRAM). Ignored when `QUANTIZATION=fp8`. |
 | `IMG_DIR` | `images` | Where `url`-mode images are written. |
 | `IMG_TTL_SECONDS` | `3600` | Auto-delete `url`-mode images older than this. |
+| `MAX_QUEUE` | `8` | Max requests in flight (1 running + waiters). Beyond this → HTTP 429. |
+| `RETRY_AFTER` | `10` | Seconds hint sent in the `Retry-After` header on 429. |
 
 > **Default** = the value used when the variable is **unset**. The shipped
 > [`.env.example`](.env.example) overrides some of these with recommended values for a
@@ -329,10 +331,28 @@ BASE_URL=http://your-gpu-server:8000 API_KEY=sk-local-changeme python test_clien
 Stdlib-only (no pip install). Saves `smoke_test.png` and exits non-zero on any failure,
 so it works in CI / deploy checks.
 
+## Concurrency & queueing
+
+txt2img and img2img share a **single GPU queue**, so only one job runs at a time (no
+OOM from parallel requests). Concurrent callers are served **FIFO**: the next request
+waits for the current one to finish.
+
+The queue is **bounded** by `MAX_QUEUE` (1 running + waiters). Beyond that, requests get
+**HTTP 429** with a `Retry-After` header instead of piling up — your client should retry
+after the hinted delay. Watch live depth via `/health`:
+
+```json
+"queue": { "running": true, "depth": 3, "limit": 8 }
+```
+
+> Serialization is **per-process**, so this requires a single worker — keep
+> `uvicorn ... --workers 1` (the default here). Multiple workers/containers would each get
+> their own queue and contend for the GPU.
+
 ## Notes & limits
 
-- **One generation at a time.** A GPU lock serializes requests so small cards don't OOM;
-  `n > 1` runs sequentially. Set generous client timeouts.
+- **One generation at a time** (see Concurrency above); `n > 1` runs sequentially.
+  Set generous client timeouts.
 - **Turbo settings are fixed** (`guidance_scale=0.0`, 9 steps) — correct for this model.
 - Tune your prompt for quality: add lens, lighting, and material detail.
 
